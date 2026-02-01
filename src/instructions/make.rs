@@ -1,6 +1,9 @@
+use std::pin;
+
 use pinocchio::{Address, AccountView, error::ProgramError, ProgramResult, cpi::{Seed, Signer}};
 use pinocchio_token::{state::TokenAccount,instructions::Transfer};
 use pinocchio_system::instructions::CreateAccount;
+use pinocchio_associated_token_account::instructions::CreateIdempotent;
 use crate::state::Escrow;
 
 /// Creates a new escrow account for token swapping.
@@ -157,7 +160,7 @@ impl<'a> TryFrom<&'a [AccountView]> for MakeAccounts<'a> {
     fn try_from(accounts: &'a [AccountView]) -> Result<Self, Self::Error> {
         // Extract accounts from the slice
         let [maker, escrow, mint_a, mint_b, maker_ata_a, vault, system_program, token_program] = accounts else {
-            return Err(ProgramError::InvalidInstructionData);
+            return Err(ProgramError::NotEnoughAccountKeys);
         };
 
         // Validate that the maker account is a signer
@@ -165,7 +168,7 @@ impl<'a> TryFrom<&'a [AccountView]> for MakeAccounts<'a> {
         
         // Validate that mint accounts are owned by the system program
         if !mint_a.owned_by(&pinocchio_system::ID) {
-            return Err(ProgramError::InvalidInstructionData);
+            return Err(ProgramError::InvalidAccountOwner);
         }
         if !mint_b.owned_by(&pinocchio_system::ID) {
             return Err(ProgramError::InvalidAccountOwner);
@@ -227,18 +230,12 @@ impl<'a> TryFrom<&'a [u8]> for MakeInstructionData {
 
 // Account validation utilities
 
-/// Trait for validating account properties
-pub trait AccountCheck {
-    /// Validates the account and returns an error if invalid
-    fn check(account: &AccountView) -> Result<(), ProgramError>;
-}
-
 /// Validator for signer accounts
 pub struct SignerAccount;
 
-impl AccountCheck for SignerAccount {
+impl SignerAccount {
     /// Validates that the account is a signer
-    fn check(account: &AccountView) -> Result<(), ProgramError> {
+    pub fn check(account: &AccountView) -> Result<(), ProgramError> {
         if !account.is_signer() {
             return Err(ProgramError::InvalidInstructionData);
         }
@@ -249,9 +246,9 @@ impl AccountCheck for SignerAccount {
 /// Validator for mint accounts
 pub struct MintInterface;
 
-impl AccountCheck for MintInterface {
+impl MintInterface {
     /// Validates that the account is owned by the token program
-    fn check(account: &AccountView) -> Result<(), ProgramError> {
+    pub fn check(account: &AccountView) -> Result<(), ProgramError> {
         if !account.owned_by(&pinocchio_token::ID) {
             return Err(ProgramError::InvalidAccountOwner);
         }
@@ -270,7 +267,7 @@ impl AssociatedTokenAccount {
     /// 2. The account has the correct data length
     /// 3. The account's mint matches the provided mint
     /// 4. The account's owner matches the provided authority
-    fn check(
+    pub fn check(
         ata: &AccountView,
         authority: &AccountView,
         mint: &AccountView,
@@ -294,7 +291,46 @@ impl AssociatedTokenAccount {
         if token_account.owner() != authority.address() {
             return Err(ProgramError::InvalidAccountData);
         }
+        Ok(())
+    }
+    pub fn init_if_needed(
+        ata: &AccountView,
+        mint: &AccountView,
+        authority: &AccountView,
+        payer: &AccountView,
+        system_program: &AccountView,
+        token_program: &AccountView,
+    ) -> ProgramResult {
+        CreateIdempotent{
+            funding_account: payer,
+            account: ata,
+            wallet: authority,
+            mint,
+            system_program,
+            token_program,
+        }
+        .invoke()?;
+        Self::check(ata, authority, mint, token_program)
+    }
+}
 
+pub struct ProgramAccount;
+
+impl ProgramAccount{
+        
+    /// 1. Owner matches the program ID
+    /// 2. account is not the signer
+    /// 3. data can't be empty
+    pub fn check(account: &AccountView) -> Result<(), ProgramError> {
+        if !account.owned_by(&pinocchio_system::ID) {
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+        if account.is_signer() {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+        if account.data_len().eq(&0) {
+            return Err(ProgramError::InvalidAccountData);
+        }
         Ok(())
     }
 }
