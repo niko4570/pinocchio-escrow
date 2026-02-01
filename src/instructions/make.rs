@@ -1,5 +1,5 @@
 use pinocchio::{Address, AccountView, error::ProgramError, ProgramResult, cpi::{Seed, Signer}};
-use pinocchio_token::state::TokenAccount;
+use pinocchio_token::{state::TokenAccount,instructions::Transfer};
 use pinocchio_system::instructions::CreateAccount;
 use crate::state::Escrow;
 
@@ -115,6 +115,15 @@ impl<'a> Make<'a> {
             .invoke()?;
         }
         
+        // Transfer tokens from maker to vault
+        Transfer {
+            from: accounts.maker_ata_a,
+            to: accounts.vault,
+            authority: accounts.maker,
+            amount: instruction_data.amount,
+        }   
+        .invoke()?;
+
         Ok(())
     }
 }
