@@ -1,6 +1,7 @@
-use pinocchio::{AccountView,ProgramResult,error::ProgramError,cpi::{Seed,Signer} };
-use pinocchio_token::{instructions::Transfer,state::{Mint, TokenAccount}};
+use pinocchio::{AccountView, Address, ProgramResult, cpi::{Seed,Signer}, error::ProgramError };
+use pinocchio_token::{instructions::{Transfer,CloseAccount},state::TokenAccount};
 use super::make::{MintInterface,SignerAccount,AssociatedTokenAccount,ProgramAccount};
+use crate::state::Escrow;
 
 pub struct Take<'a> {
     pub accounts: TakeAccounts<'a>,
@@ -21,9 +22,9 @@ impl<'a> Take<'a> {
     
     /// 1. receive / pay ATA is existed
     /// 2. escrow is valid
-    /// 3. vault:mint_b -> taker_ata_b
-    /// 4. vault:mint_a -> taker_ata_a
-    /// 5. close vault
+    /// 3. vault:mint_a -> taker_ata_a
+    /// 4. close vault
+    /// 5. taker:mint_b -> maker_ata_b
     /// 6. close escrow
     pub fn process(&self) -> ProgramResult {
         
@@ -44,7 +45,60 @@ impl<'a> Take<'a> {
             self.accounts.system_program,
             self.accounts.token_program,
         )?;
-        Ok(())
+
+        // check escrow is valid
+        let data =self.accounts.escrow.try_borrow()?;
+        let escrow=Escrow::load(&data)?;
+        let (escrow_address,_)=Address::find_program_address(&[
+            b"escrow",
+            self.accounts.maker.address().as_ref(),
+            &escrow.seed.to_le_bytes(),
+            &escrow.bump,
+        ],&crate::ID);
+        if escrow_address!=*self.accounts.escrow.address() {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        let seed_binding=escrow.seed.to_le_bytes();
+        let bump_binding=escrow.bump;
+        let seed=[
+            Seed::from(b"escrow"),
+            Seed::from(self.accounts.maker.address().as_ref()),
+            Seed::from(&seed_binding),
+            Seed::from(&bump_binding),
+        ];
+        let signer=Signer::from(&seed);
+
+        let amount=TokenAccount::from_account_view(self.accounts.vault)?.amount();
+        
+        // Transfer from vault to taker_ata_a
+        // vault:mint_a -> taker_ata_a
+        Transfer{
+            from: self.accounts.vault,
+            to: self.accounts.taker_ata_a,
+            authority: self.accounts.escrow,
+            amount,
+        }.invoke_signed(&[signer.clone()])?;
+        
+        // After transfer, the vault is empty
+        // Close the vault
+        CloseAccount{
+            account: self.accounts.vault,
+            destination: self.accounts.maker,
+            authority: self.accounts.escrow,
+        }.invoke_signed(&[signer.clone()])?;
+        
+        // The vault is closing, so taker should tranfer mint_b to maker
+        Transfer{
+            from: self.accounts.taker_ata_b,
+            to: self.accounts.maker_ata_b,
+            authority: self.accounts.taker,
+            amount,
+        }.invoke()?;
+
+        // Close the Escrow
+        drop(data);
+        ProgramAccount::close(self.accounts.escrow, self.accounts.taker)
     }
 }
 

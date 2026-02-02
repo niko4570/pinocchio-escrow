@@ -19,6 +19,7 @@ pub fn process_instructions(
 ) -> ProgramResult{
     match instruction_data.split_first() {
         Some((Make::DISCRIMINATOR,data)) => make::Make::try_from((accounts,data))?.process(),
+        Some((Take::DISCRIMINATOR,_)) => take::Take::try_from(accounts)?.process(),
     }
 }
 
