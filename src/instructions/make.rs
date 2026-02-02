@@ -301,6 +301,14 @@ impl AssociatedTokenAccount {
         system_program: &AccountView,
         token_program: &AccountView,
     ) -> ProgramResult {
+        
+        if ata.data_len() == TokenAccount::LEN {
+            let token_account = TokenAccount::from_account_view(ata)?;
+
+            if token_account.is_initialized() {
+                return Ok(Self::check(ata, authority, mint, token_program)?)
+            }
+        }
         CreateIdempotent{
             funding_account: payer,
             account: ata,
