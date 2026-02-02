@@ -325,7 +325,10 @@ impl AssociatedTokenAccount {
 pub struct ProgramAccount;
 
 impl ProgramAccount{
-        
+     
+    /// Validates that the account is owned by the system program
+    /// 
+    /// Validates:
     /// 1. Owner matches the program ID
     /// 2. account is not the signer
     /// 3. data can't be empty
@@ -339,6 +342,27 @@ impl ProgramAccount{
         if account.data_len().eq(&0) {
             return Err(ProgramError::InvalidAccountData);
         }
+        Ok(())
+    }
+    /// Closes the account
+    /// 
+    /// Validates:
+    /// 1. The account is owned by the system program
+    /// 2. The account is not a signer
+    /// 3. The account has non-zero data
+    pub fn close(account: &AccountView,destination: &AccountView) -> Result<(), ProgramError> {
+        
+        if !account.owned_by(&crate::ID){
+            return Err(ProgramError::InvalidAccountOwner);
+        }
+
+        let lamports =account.lamports();
+        if lamports > 0 {
+            account.set_lamports(0);
+            destination.set_lamports(destination.lamports()+lamports);
+        }
+
+        unsafe{account.assign(&pinocchio_system::ID)};
         Ok(())
     }
 }
